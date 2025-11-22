@@ -1,12 +1,8 @@
 name: Build
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        default: 'latest'
-        description: 'Package version'
-        type: string
-        required: true
+  push:
+    tags:
+      - '*'
 
 jobs:
   check_release:
@@ -22,16 +18,9 @@ jobs:
       - name: Get Version
         id: get-version
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            VERSION="latest"
-          else
-            VERSION=${{ github.event.inputs.version }}
-          fi
-          if [ "$VERSION" = "latest" ]; then
-            VERSION=$(curl -s "https://api.github.com/repos/ccache/ccache/releases/latest" | jq -r .tag_name)
-          fi
+          VERSION="${{ github.ref_name }}"
 
-          if [ -z "${VERSION}" ] || [ "${VERSION}" == "null" ]; then
+          if [ -z "${VERSION}" ]; then
             echo "Failed to get version"
             exit 1
           fi

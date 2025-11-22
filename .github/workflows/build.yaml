@@ -1,0 +1,264 @@
+name: Build
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        default: 'latest'
+        description: 'Package version'
+        type: string
+        required: true
+  schedule:
+    - cron: '0 20 * * *'
+
+jobs:
+  check_release:
+    name: Check version
+    runs-on: ubuntu-24.04
+    outputs:
+      VERSION: ${{ steps.get-version.outputs.VERSION }}
+      BUILD: ${{ steps.get-version.outputs.BUILD }}
+    steps:
+      - name: Get source
+        uses: actions/checkout@v5
+
+      - name: Get Version
+        id: get-version
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            VERSION="latest"
+          else
+            VERSION=${{ github.event.inputs.version }}
+          fi
+          if [ "$version" = "latest" ]; then
+            VERSION=$(curl -s "https://api.github.com/repos/ccache/ccache/releases/latest" | jq -r .tag_name)
+          fi
+
+          if [ -z "${VERSION}" ] || [ "${VERSION}" == "null" ]; then
+            echo "Failed to get version"
+            exit 1
+          fi
+
+          gh release view ${VERSION} -R ${{ github.repository }} | grep ccache-.*-linux-loongarch64.tar.xz >/dev/null 2>&1 || echo "BUILD=1" >> $GITHUB_OUTPUT
+
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+
+          echo "========== Build Args =========="
+          echo "VERSION=${VERSION}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build_documentation:
+    name: Documentation
+    runs-on: ubuntu-24.04
+    needs: check_release
+    if: needs.check_release.outputs.BUILD == '1'
+    env:
+      CMAKE_GENERATOR: Ninja
+      VERSION: ${{ needs.check_release.outputs.VERSION }}
+    steps:
+      - name: Get source
+        uses: actions/checkout@v4
+        with:
+          repository: ccache/ccache
+          ref: ${{ env.VERSION }}
+
+      - name: Prepare environment
+        run: |
+          sudo apt-get install -y asciidoctor pandoc
+
+      - name: Build documentation
+        run: ci/build-docs
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: |
+            doc/install.md
+            GPL-3.0.txt
+            install
+            README.md
+
+  build_linux_binary:
+    name: Linux binary
+    runs-on: ${{ matrix.settings.host }}
+    needs: check_release
+    if: needs.check_release.outputs.BUILD == '1'
+    env:
+      VERSION: ${{ needs.check_release.outputs.VERSION }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: ubuntu-24.04
+            arch: x86_64
+
+          - host: ubuntu-24.04-arm
+            arch: aarch64
+
+          - host: ubuntu-24.04
+            arch: loongarch64
+
+          - host: ubuntu-24.04
+            arch: ppc64le
+
+          - host: ubuntu-24.04
+            arch: riscv64
+
+          - host: ubuntu-24.04
+            arch: s390x
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ libc6-dev
+
+      - name: Setup cross-tools
+        run: |
+          ARCH=${{ matrix.settings.arch }}
+          TOOLCHAIN_TRIPLET="${ARCH}-linux-gnu"
+          case "$ARCH" in
+            loongarch64)
+              sudo apt-get install -y g++-13-loongarch64-linux-gnu
+                ;;
+            ppc64le)
+              TOOLCHAIN_TRIPLET="powerpc64le-linux-gnu"
+              sudo apt-get install -y g++-13-powerpc64le-linux-gnu
+              ;;
+            riscv64)
+              sudo apt-get install -y g++-13-riscv64-linux-gnu
+              ;;
+            s390x)
+              sudo apt-get install -y g++-13-powerpc64le-linux-gnu
+              ;;
+            *)
+              CMAKE_PARAMS="-D CMAKE_EXE_LINKER_FLAGS_INIT=-static-libstdc++" >> GITHUB_ENV
+              return 0
+              ;;
+          esac
+
+          sudo update-alternatives \
+            --install /usr/bin/${TOOLCHAIN_TRIPLET}-gcc ${TOOLCHAIN_TRIPLET}-gcc /usr/bin/${TOOLCHAIN_TRIPLET}-gcc-13 100 \
+            --slave /usr/bin/${TOOLCHAIN_TRIPLET}-gcc-ar ${TOOLCHAIN_TRIPLET}-gcc-ar /usr/bin/${TOOLCHAIN_TRIPLET}-gcc-ar-13 \
+            --slave /usr/bin/${TOOLCHAIN_TRIPLET}-gcc-nm ${TOOLCHAIN_TRIPLET}-gcc-nm /usr/bin/${TOOLCHAIN_TRIPLET}-gcc-nm-13 \
+            --slave /usr/bin/${TOOLCHAIN_TRIPLET}-gcc-ranlib ${TOOLCHAIN_TRIPLET}-gcc-ranlib /usr/bin/${TOOLCHAIN_TRIPLET}-gcc-ranlib-13 \
+            --slave /usr/bin/${TOOLCHAIN_TRIPLET}-gcov ${TOOLCHAIN_TRIPLET}-gcov /usr/bin/${TOOLCHAIN_TRIPLET}-gcov-13
+          sudo update-alternatives \
+            --install /usr/bin/${TOOLCHAIN_TRIPLET}-g++ ${TOOLCHAIN_TRIPLET}-g++ /usr/bin/${TOOLCHAIN_TRIPLET}-g++-13 100
+          sudo update-alternatives \
+            --install /usr/bin/${TOOLCHAIN_TRIPLET}-cpp ${TOOLCHAIN_TRIPLET}-cpp /usr/bin/${TOOLCHAIN_TRIPLET}-cpp-13 100
+
+          if [ ! -f "toolchains/${ARCH}-linux-gnu.cmake" ]; then
+            wget -qO "toolchains/${ARCH}-linux-gnu.cmake" "https://github.com/loong64/ccache/raw/refs/heads/master/toolchains/${ARCH}-linux-gnu.cmake"
+          fi
+
+          CMAKE_PARAMS="-D CMAKE_TOOLCHAIN_FILE=../toolchains/${ARCH}-linux-gnu.cmake -D CMAKE_EXE_LINKER_FLAGS_INIT=-static-libstdc++" >> GITHUB_ENV
+
+      - name: Get source
+        uses: actions/checkout@v5
+        with:
+          repository: ccache/ccache
+          ref: ${{ env.VERSION }}
+
+      - name: Build binary
+        env:
+          CMAKE_GENERATOR: Ninja
+          CMAKE_PARAMS: ${{ env.CMAKE_PARAMS }}
+        run: ci/build-binary
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.settings.arch }}-binary
+          path: install/bin/ccache
+          retention-days: 3
+
+  build_release:
+    name: Build release
+    env:
+      VERSION: ${{ needs.check_release.outputs.VERSION }}
+    needs:
+      - check_release
+      - build_documentation
+      - build_linux_binary
+
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Prepare environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Get source
+        uses: actions/checkout@v4
+
+      - name: Download binaries
+        uses: actions/download-artifact@v5
+        with:
+          pattern: "*-binary"
+
+      - name: Download docs
+        uses: actions/download-artifact@v5
+        with:
+          pattern: docs
+          path: docs
+
+      - name: Build release
+        run: |
+          ARCH=${{ matrix.settings.arch }}
+          name="ccache-${VERSION/v/}-${ARCH}"
+          mkdir release "${name}"
+          cp "linux-${ARCH}-binary/ccache" "${name}"
+          chmod +x "${name}/ccache"
+          cp misc/Makefile.posix-binary-release "${name}/Makefile"
+          cp GPL-3.0.txt README.md "${name}"
+          cp docs/install/share/doc/ccache/* "${name}"
+          cp docs/install/share/man/man1/ccache.1 "${name}"
+          tar -caf "release/${name}.tar.xz" "${name}"
+
+      - name: Sign release archives
+        if: env.MINISIGN_KEY != ''
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+        run: |
+          mkdir -p ~/.minisign
+          echo "${MINISIGN_KEY}" | base64 -d > ~/.minisign/minisign.key
+          minisign -Sm release/*
+
+      - name: Upload release
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release
+          retention-days: 3    
+
+  create_release:
+    name: Create release
+    env:
+      VERSION: ${{ needs.check_release.outputs.VERSION }}
+    needs:
+      - check_release
+      - build_release
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get source
+        uses: actions/checkout@v4
+
+      - name: Download release
+        uses: actions/download-artifact@v5
+        with:
+          name: release
+          path: release
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ env.VERSION }}"
+          gh release create "${TAG_NAME}" \
+            --generate-notes \
+            --title "${TAG_NAME#v*}" \
+            release/*

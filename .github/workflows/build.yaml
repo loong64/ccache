@@ -7,8 +7,6 @@ on:
         description: 'Package version'
         type: string
         required: true
-  schedule:
-    - cron: '0 20 * * *'
 
 jobs:
   check_release:
@@ -29,7 +27,7 @@ jobs:
           else
             VERSION=${{ github.event.inputs.version }}
           fi
-          if [ "$version" = "latest" ]; then
+          if [ "$VERSION" = "latest" ]; then
             VERSION=$(curl -s "https://api.github.com/repos/ccache/ccache/releases/latest" | jq -r .tag_name)
           fi
 
@@ -92,23 +90,23 @@ jobs:
         settings:
           - host: ubuntu-24.04
             arch: x86_64
-
           - host: ubuntu-24.04-arm
             arch: aarch64
-
           - host: ubuntu-24.04
             arch: loongarch64
-
           - host: ubuntu-24.04
             arch: ppc64le
-
           - host: ubuntu-24.04
             arch: riscv64
-
           - host: ubuntu-24.04
             arch: s390x
-
     steps:
+      - name: Get source
+        uses: actions/checkout@v4
+        with:
+          repository: ccache/ccache
+          ref: ${{ env.VERSION }}
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -130,11 +128,11 @@ jobs:
               sudo apt-get install -y g++-13-riscv64-linux-gnu
               ;;
             s390x)
-              sudo apt-get install -y g++-13-powerpc64le-linux-gnu
+              sudo apt-get install -y g++-13-s390x-linux-gnu
               ;;
             *)
-              CMAKE_PARAMS="-D CMAKE_EXE_LINKER_FLAGS_INIT=-static-libstdc++" >> GITHUB_ENV
-              return 0
+              echo "CMAKE_PARAMS=-D CCACHE_VERSION=${VERSION/v/} -D CMAKE_EXE_LINKER_FLAGS_INIT=-static-libstdc++" >> $GITHUB_ENV
+              exit 0
               ;;
           esac
 
@@ -149,17 +147,9 @@ jobs:
           sudo update-alternatives \
             --install /usr/bin/${TOOLCHAIN_TRIPLET}-cpp ${TOOLCHAIN_TRIPLET}-cpp /usr/bin/${TOOLCHAIN_TRIPLET}-cpp-13 100
 
-          if [ ! -f "toolchains/${ARCH}-linux-gnu.cmake" ]; then
-            wget -qO "toolchains/${ARCH}-linux-gnu.cmake" "https://github.com/loong64/ccache/raw/refs/heads/master/toolchains/${ARCH}-linux-gnu.cmake"
-          fi
+          wget -qO "toolchains/${ARCH}-linux-gnu.cmake" "https://github.com/loong64/ccache/raw/refs/heads/master/toolchains/${ARCH}-linux-gnu.cmake"
 
-          CMAKE_PARAMS="-D CMAKE_TOOLCHAIN_FILE=../toolchains/${ARCH}-linux-gnu.cmake -D CMAKE_EXE_LINKER_FLAGS_INIT=-static-libstdc++" >> GITHUB_ENV
-
-      - name: Get source
-        uses: actions/checkout@v5
-        with:
-          repository: ccache/ccache
-          ref: ${{ env.VERSION }}
+          echo "CMAKE_PARAMS=-D CCACHE_VERSION=${VERSION/v/} -D CMAKE_TOOLCHAIN_FILE=../toolchains/${ARCH}-linux-gnu.cmake -D CMAKE_EXE_LINKER_FLAGS_INIT=-static-libstdc++" >> $GITHUB_ENV
 
       - name: Build binary
         env:
@@ -182,7 +172,6 @@ jobs:
       - check_release
       - build_documentation
       - build_linux_binary
-
     runs-on: ubuntu-24.04
     steps:
       - name: Prepare environment
@@ -192,6 +181,9 @@ jobs:
 
       - name: Get source
         uses: actions/checkout@v4
+        with:
+          repository: ccache/ccache
+          ref: ${{ env.VERSION }}
 
       - name: Download binaries
         uses: actions/download-artifact@v5
@@ -206,16 +198,20 @@ jobs:
 
       - name: Build release
         run: |
-          ARCH=${{ matrix.settings.arch }}
-          name="ccache-${VERSION/v/}-${ARCH}"
-          mkdir release "${name}"
-          cp "linux-${ARCH}-binary/ccache" "${name}"
-          chmod +x "${name}/ccache"
-          cp misc/Makefile.posix-binary-release "${name}/Makefile"
-          cp GPL-3.0.txt README.md "${name}"
-          cp docs/install/share/doc/ccache/* "${name}"
-          cp docs/install/share/man/man1/ccache.1 "${name}"
-          tar -caf "release/${name}.tar.xz" "${name}"
+          OS=linux
+          ARCHS="x86_64 aarch64 loongarch64 ppc64le riscv64 s390x"
+          for ARCH in ${ARCHS}; do
+            name="ccache-${VERSION/v/}-${OS}-${ARCH}"
+            mkdir -p release "${name}"
+            cp "${OS}-${ARCH}-binary/ccache" "${name}"
+            chmod +x "${name}/ccache"
+            cp misc/Makefile.posix-binary-release "${name}/Makefile"
+            cp GPL-3.0.txt README.md "${name}"
+            cp docs/install/share/doc/ccache/* "${name}"
+            cp docs/install/share/man/man1/ccache.1 "${name}"
+            tar -caf "release/${name}.tar.xz" "${name}"
+          done
+          ls -al release/
 
       - name: Sign release archives
         if: env.MINISIGN_KEY != ''

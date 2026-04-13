@@ -7,13 +7,13 @@ on:
 jobs:
   check_release:
     name: Check version
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     outputs:
       VERSION: ${{ steps.get-version.outputs.VERSION }}
       BUILD: ${{ steps.get-version.outputs.BUILD }}
     steps:
       - name: Get source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Get Version
         id: get-version
@@ -44,7 +44,7 @@ jobs:
       VERSION: ${{ needs.check_release.outputs.VERSION }}
     steps:
       - name: Get source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ccache/ccache
           ref: ${{ env.VERSION }}
@@ -57,7 +57,7 @@ jobs:
         run: ci/build-docs
 
       - name: Upload documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docs
           path: |
@@ -85,13 +85,13 @@ jobs:
             arch: loongarch64
           - host: ubuntu-24.04
             arch: ppc64le
-          - host: ubuntu-24.04
+          - host: ubuntu-24.04-riscv
             arch: riscv64
           - host: ubuntu-24.04
             arch: s390x
     steps:
       - name: Get source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ccache/ccache
           ref: ${{ env.VERSION }}
@@ -147,7 +147,7 @@ jobs:
         run: ci/build-binary
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-${{ matrix.settings.arch }}-binary
           path: install/ccache
@@ -169,7 +169,7 @@ jobs:
           sudo apt-get install -y minisign
 
       - name: Get source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ccache/ccache
           ref: ${{ env.VERSION }}
@@ -212,7 +212,7 @@ jobs:
           minisign -Sm release/*
 
       - name: Upload release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release
           path: release
@@ -227,13 +227,13 @@ jobs:
       - build_release
     permissions:
       contents: write
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
       - name: Get source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download release
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: release
           path: release

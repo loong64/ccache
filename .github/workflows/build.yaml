@@ -113,9 +113,6 @@ jobs:
               TOOLCHAIN_TRIPLET="powerpc64le-linux-gnu"
               sudo apt-get install -y g++-13-powerpc64le-linux-gnu
               ;;
-            riscv64)
-              sudo apt-get install -y g++-13-riscv64-linux-gnu
-              ;;
             s390x)
               sudo apt-get install -y g++-13-s390x-linux-gnu
               ;;
